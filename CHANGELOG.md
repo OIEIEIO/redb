@@ -21,6 +21,10 @@
   be added behind the `experimental_cursor` feature flag, like the table cursors' were.
 
 ## 4.2.0 - 2026-XX-XX
+* Add `Key::separator()`, which returns a short slice that separates two keys. Internal btree nodes
+  store the result instead of a whole key, so more children fit in each node and lookups touch
+  fewer pages. The default implementation returns a whole key, leaving existing `Key`
+  implementations unchanged; `&[u8]` keys now store minimal prefixes.
 * `Durability::None` commits are about 2x faster.
 * Commits now flush table root updates in a deterministic order, removing a source of
   nondeterminism that could make identical operation sequences produce differing database files
