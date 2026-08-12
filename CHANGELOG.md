@@ -101,6 +101,9 @@
 * Add `ExtractIf::close()` to explicitly finalize an extract iterator without removing unread
   entries.
 * Optimize `Table::pop_first()` and `Table::pop_last()` to be about 2x faster.
+* Improve multithreaded read scaling. Each thread now caches the top of the btrees it reads,
+  removing lock and reference-count contention on those hot pages. Random reads are about 1.4x
+  faster with 16 or more threads.
 * Enable file space reclamation during non-durable transactions performed while a savepoint exists.
 * Reuse pages freed by a durable write transaction in the next write transaction when no
   live read transaction or savepoint still needs them. Previously, pages were not reused for one
