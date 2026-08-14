@@ -191,6 +191,18 @@ impl PageAllocator {
         self.allocated_since_commit.take_all()
     }
 
+    // Takes ownership of pages allocated by an earlier transaction so this one can update them
+    // in place. Only sound once this transaction can no longer abort: rollback_all() frees
+    // whatever is adopted here. A page that has stopped being unpersisted was reclaimed and its
+    // number may now belong to something else, so only pages still in that set are taken.
+    pub(crate) fn adopt_unpersisted(&self, pages: impl IntoIterator<Item = PageNumber>) {
+        for page in pages {
+            if self.mem.unpersisted(page) {
+                self.allocated_since_commit.insert(page);
+            }
+        }
+    }
+
     /// Reverses every allocation made since the last commit: drains the
     /// allocated-since-commit set and frees each page.
     pub(crate) fn rollback_all(&self) {
@@ -354,6 +366,10 @@ struct UnpersistedState {
     // here for the same reason as `allocations` -- the commits that freed them are volatile, so a
     // crash that loses the records also rolls back the commits they describe.
     data_freed: BTreeMap<TransactionId, Vec<PageNumber>>,
+    // System-tree pages allocated by the post-commit epilogue, which the next durable commit may
+    // take over once it is irreversible. A subset of `pages`: reclaiming a page drops it from
+    // both, so a reused page number is never mistaken for the allocation that held it before.
+    post_commit_allocations: PageNumberHashSet,
 }
 
 impl UnpersistedState {
@@ -363,6 +379,7 @@ impl UnpersistedState {
         self.allocations.clear();
         self.allocation_txn.clear();
         self.data_freed.clear();
+        self.post_commit_allocations.clear();
     }
 
     fn contains(&self, page: PageNumber) -> bool {
@@ -379,6 +396,8 @@ impl UnpersistedState {
         if !self.pages.remove(&page) {
             return false;
         }
+        // Maintains the subset invariant with `pages`; see the field.
+        self.post_commit_allocations.remove(&page);
         if let Some(txn) = self.allocation_txn.remove(&page) {
             let pages = self
                 .allocations
@@ -1307,6 +1326,21 @@ impl TransactionalMemory {
         &self,
     ) -> BTreeMap<TransactionId, PageNumberHashSet> {
         self.unpersisted.lock().unwrap().take_allocations()
+    }
+
+    pub(crate) fn record_post_commit_allocations(
+        &self,
+        pages: impl IntoIterator<Item = PageNumber>,
+    ) {
+        self.unpersisted
+            .lock()
+            .unwrap()
+            .post_commit_allocations
+            .extend(pages);
+    }
+
+    pub(crate) fn take_post_commit_allocations(&self) -> PageNumberHashSet {
+        mem::take(&mut self.unpersisted.lock().unwrap().post_commit_allocations)
     }
 
     // Returns all unpersisted data-tree pages allocated strictly after `transaction_id`. Used
